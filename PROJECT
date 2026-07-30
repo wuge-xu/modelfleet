@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: modelfleet
 repo: github.com/wuge-xu/modelfleet
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: modelfleet.io
+  group: serving
+  kind: ModelService
+  path: github.com/wuge-xu/modelfleet/api/v1alpha1
+  version: v1alpha1
 version: "3"

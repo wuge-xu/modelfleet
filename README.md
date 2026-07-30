@@ -48,9 +48,9 @@ ModelFleet 不重新实现模型推理引擎，而是管理推理运行时在 Ku
 
 ## 当前阶段
 
-阶段 0：项目基线与开发环境初始化。
+阶段 1：ModelService v1alpha1 API 契约。
 
-当前已经完成 Kubebuilder 初始化，基础代码可以编译并通过测试。
+当前已经完成 CRD、API 类型、默认值、字段校验、Status 子资源和 EnvTest 验证。
 
 ## 技术栈
 

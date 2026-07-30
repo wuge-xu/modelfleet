@@ -1,0 +1,23 @@
+apiVersion: serving.modelfleet.io/v1alpha1
+kind: ModelService
+metadata:
+  name: tiny-gpt
+spec:
+  model:
+    name: tiny-gpt
+    version: v1
+    uri: hf://sshleifer/tiny-gpt2
+  runtime:
+    type: transformers
+    image: ghcr.io/wuge-xu/modelfleet-tiny-runtime:v0.1.0
+    args:
+      - --model-uri=hf://sshleifer/tiny-gpt2
+  replicas: 1
+  port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
