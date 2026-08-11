@@ -40,6 +40,7 @@ func buildModelDeployment(
 	scheme *runtime.Scheme,
 ) (*appsv1.Deployment, error) {
 	labels := modelDeploymentLabels(modelService)
+	selectorLabels := modelSelectorLabels(modelService)
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -53,7 +54,7 @@ func buildModelDeployment(
 		Spec: appsv1.DeploymentSpec{
 			Replicas: desiredModelReplicas(modelService),
 			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
+				MatchLabels: selectorLabels,
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
@@ -96,21 +97,30 @@ func modelDeploymentName(modelService *servingv1alpha1.ModelService) string {
 	return modelService.Name + "-runtime"
 }
 
-func modelDeploymentLabels(modelService *servingv1alpha1.ModelService) map[string]string {
+func modelSelectorLabels(modelService *servingv1alpha1.ModelService) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":             "model-runtime",
 		"app.kubernetes.io/instance":         modelService.Name,
-		"app.kubernetes.io/managed-by":       "modelfleet",
 		"serving.modelfleet.io/modelservice": modelService.Name,
-		"serving.modelfleet.io/runtime":      string(modelService.Spec.Runtime.Type),
 	}
+}
+
+func modelDeploymentLabels(modelService *servingv1alpha1.ModelService) map[string]string {
+	labels := modelSelectorLabels(modelService)
+
+	labels["app.kubernetes.io/managed-by"] = "modelfleet"
+	labels["serving.modelfleet.io/runtime"] = string(modelService.Spec.Runtime.Type)
+
+	return labels
 }
 
 func desiredModelReplicas(modelService *servingv1alpha1.ModelService) *int32 {
 	replicas := defaultModelReplicas
+
 	if modelService.Spec.Replicas != nil {
 		replicas = *modelService.Spec.Replicas
 	}
+
 	return &replicas
 }
 
@@ -118,5 +128,6 @@ func desiredModelPort(modelService *servingv1alpha1.ModelService) int32 {
 	if modelService.Spec.Port == 0 {
 		return defaultModelPort
 	}
+
 	return modelService.Spec.Port
 }

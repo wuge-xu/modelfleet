@@ -31,11 +31,13 @@ import (
 
 func TestBuildModelDeployment(t *testing.T) {
 	scheme := runtime.NewScheme()
+
 	if err := servingv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add ModelService scheme: %v", err)
 	}
 
 	replicas := int32(2)
+
 	modelService := &servingv1alpha1.ModelService{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tiny-gpt",
@@ -104,18 +106,31 @@ func TestBuildModelDeployment(t *testing.T) {
 	}
 
 	if container.Resources.Requests.Cpu().String() != "250m" {
-		t.Fatalf("unexpected CPU request: %s", container.Resources.Requests.Cpu().String())
+		t.Fatalf(
+			"unexpected CPU request: %s",
+			container.Resources.Requests.Cpu().String(),
+		)
 	}
 
 	if container.Resources.Requests.Memory().String() != "512Mi" {
-		t.Fatalf("unexpected memory request: %s", container.Resources.Requests.Memory().String())
+		t.Fatalf(
+			"unexpected memory request: %s",
+			container.Resources.Requests.Memory().String(),
+		)
 	}
 
-	if !reflect.DeepEqual(
-		deployment.Spec.Selector.MatchLabels,
-		deployment.Spec.Template.Labels,
-	) {
-		t.Fatalf("Deployment selector and Pod labels must match")
+	for key, value := range deployment.Spec.Selector.MatchLabels {
+		if deployment.Spec.Template.Labels[key] != value {
+			t.Fatalf(
+				"selector label %s=%s is missing from Pod labels",
+				key,
+				value,
+			)
+		}
+	}
+
+	if deployment.Spec.Template.Labels["serving.modelfleet.io/runtime"] != "transformers" {
+		t.Fatalf("runtime Pod label was not set")
 	}
 
 	if deployment.Annotations["serving.modelfleet.io/model-version"] != "v1" {
@@ -127,11 +142,16 @@ func TestBuildModelDeployment(t *testing.T) {
 	}
 
 	ownerReferences := deployment.GetOwnerReferences()
+
 	if len(ownerReferences) != 1 {
-		t.Fatalf("expected one owner reference, got %d", len(ownerReferences))
+		t.Fatalf(
+			"expected one owner reference, got %d",
+			len(ownerReferences),
+		)
 	}
 
 	ownerReference := ownerReferences[0]
+
 	if ownerReference.UID != modelService.UID {
 		t.Fatalf("unexpected owner UID: %s", ownerReference.UID)
 	}
@@ -143,6 +163,7 @@ func TestBuildModelDeployment(t *testing.T) {
 
 func TestBuildModelDeploymentUsesDefaults(t *testing.T) {
 	scheme := runtime.NewScheme()
+
 	if err := servingv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add ModelService scheme: %v", err)
 	}
@@ -171,12 +192,22 @@ func TestBuildModelDeploymentUsesDefaults(t *testing.T) {
 		t.Fatalf("build Deployment: %v", err)
 	}
 
-	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != defaultModelReplicas {
-		t.Fatalf("expected default replicas %d", defaultModelReplicas)
+	if deployment.Spec.Replicas == nil ||
+		*deployment.Spec.Replicas != defaultModelReplicas {
+		t.Fatalf(
+			"expected default replicas %d",
+			defaultModelReplicas,
+		)
 	}
 
-	containerPort := deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort
+	containerPort :=
+		deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort
+
 	if containerPort != defaultModelPort {
-		t.Fatalf("expected default port %d, got %d", defaultModelPort, containerPort)
+		t.Fatalf(
+			"expected default port %d, got %d",
+			defaultModelPort,
+			containerPort,
+		)
 	}
 }
