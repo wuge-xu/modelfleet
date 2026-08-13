@@ -211,7 +211,6 @@ func applyDesiredDeployment(
 	actual.Annotations = copyStringMap(desired.Annotations)
 	actual.Spec.Replicas = desired.Spec.Replicas
 
-	// Deployment selector is immutable after creation.
 	if actual.Spec.Selector == nil {
 		actual.Spec.Selector = desired.Spec.Selector.DeepCopy()
 	}
@@ -247,6 +246,15 @@ func applyDesiredDeployment(
 	actualRuntime.Resources =
 		*desiredRuntime.Resources.DeepCopy()
 
+	actualRuntime.StartupProbe =
+		copyProbe(desiredRuntime.StartupProbe)
+
+	actualRuntime.ReadinessProbe =
+		copyProbe(desiredRuntime.ReadinessProbe)
+
+	actualRuntime.LivenessProbe =
+		copyProbe(desiredRuntime.LivenessProbe)
+
 	return nil
 }
 
@@ -274,9 +282,6 @@ func applyDesiredService(
 	actual.Spec.Selector = copyStringMap(desired.Spec.Selector)
 	actual.Spec.Ports = copyServicePorts(desired.Spec.Ports)
 
-	// ClusterIP, ClusterIPs, IPFamilies and similar fields are assigned
-	// or defaulted by Kubernetes and must not be overwritten here.
-
 	return nil
 }
 
@@ -293,6 +298,14 @@ func findRuntimeContainer(
 	}
 
 	return nil
+}
+
+func copyProbe(source *corev1.Probe) *corev1.Probe {
+	if source == nil {
+		return nil
+	}
+
+	return source.DeepCopy()
 }
 
 func copyStringMap(source map[string]string) map[string]string {

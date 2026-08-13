@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	servingv1alpha1 "github.com/wuge-xu/modelfleet/api/v1alpha1"
@@ -33,6 +34,11 @@ const (
 	defaultModelPort     int32 = 8000
 
 	runtimeContainerName = "runtime"
+	runtimeHTTPPortName  = "http"
+
+	startupProbePath   = "/health"
+	readinessProbePath = "/ready"
+	livenessProbePath  = "/health"
 )
 
 func buildModelDeployment(
@@ -70,15 +76,39 @@ func buildModelDeployment(
 							Name:            runtimeContainerName,
 							Image:           modelService.Spec.Runtime.Image,
 							ImagePullPolicy: corev1.PullIfNotPresent,
-							Args:            append([]string(nil), modelService.Spec.Runtime.Args...),
+							Args: append(
+								[]string(nil),
+								modelService.Spec.Runtime.Args...,
+							),
 							Ports: []corev1.ContainerPort{
 								{
-									Name:          "http",
+									Name:          runtimeHTTPPortName,
 									ContainerPort: desiredModelPort(modelService),
 									Protocol:      corev1.ProtocolTCP,
 								},
 							},
 							Resources: *modelService.Spec.Resources.DeepCopy(),
+
+							StartupProbe: buildHTTPProbe(
+								startupProbePath,
+								5,
+								2,
+								60,
+							),
+
+							ReadinessProbe: buildHTTPProbe(
+								readinessProbePath,
+								5,
+								2,
+								3,
+							),
+
+							LivenessProbe: buildHTTPProbe(
+								livenessProbePath,
+								10,
+								2,
+								3,
+							),
 						},
 					},
 				},
@@ -86,18 +116,49 @@ func buildModelDeployment(
 		},
 	}
 
-	if err := controllerutil.SetControllerReference(modelService, deployment, scheme); err != nil {
-		return nil, fmt.Errorf("set ModelService controller reference: %w", err)
+	if err := controllerutil.SetControllerReference(
+		modelService,
+		deployment,
+		scheme,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"set ModelService controller reference: %w",
+			err,
+		)
 	}
 
 	return deployment, nil
 }
 
-func modelDeploymentName(modelService *servingv1alpha1.ModelService) string {
+func buildHTTPProbe(
+	path string,
+	periodSeconds int32,
+	timeoutSeconds int32,
+	failureThreshold int32,
+) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path:   path,
+				Port:   intstr.FromString(runtimeHTTPPortName),
+				Scheme: corev1.URISchemeHTTP,
+			},
+		},
+		PeriodSeconds:    periodSeconds,
+		TimeoutSeconds:   timeoutSeconds,
+		FailureThreshold: failureThreshold,
+	}
+}
+
+func modelDeploymentName(
+	modelService *servingv1alpha1.ModelService,
+) string {
 	return modelService.Name + "-runtime"
 }
 
-func modelSelectorLabels(modelService *servingv1alpha1.ModelService) map[string]string {
+func modelSelectorLabels(
+	modelService *servingv1alpha1.ModelService,
+) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":             "model-runtime",
 		"app.kubernetes.io/instance":         modelService.Name,
@@ -105,16 +166,21 @@ func modelSelectorLabels(modelService *servingv1alpha1.ModelService) map[string]
 	}
 }
 
-func modelDeploymentLabels(modelService *servingv1alpha1.ModelService) map[string]string {
+func modelDeploymentLabels(
+	modelService *servingv1alpha1.ModelService,
+) map[string]string {
 	labels := modelSelectorLabels(modelService)
 
 	labels["app.kubernetes.io/managed-by"] = "modelfleet"
-	labels["serving.modelfleet.io/runtime"] = string(modelService.Spec.Runtime.Type)
+	labels["serving.modelfleet.io/runtime"] =
+		string(modelService.Spec.Runtime.Type)
 
 	return labels
 }
 
-func desiredModelReplicas(modelService *servingv1alpha1.ModelService) *int32 {
+func desiredModelReplicas(
+	modelService *servingv1alpha1.ModelService,
+) *int32 {
 	replicas := defaultModelReplicas
 
 	if modelService.Spec.Replicas != nil {
@@ -124,7 +190,9 @@ func desiredModelReplicas(modelService *servingv1alpha1.ModelService) *int32 {
 	return &replicas
 }
 
-func desiredModelPort(modelService *servingv1alpha1.ModelService) int32 {
+func desiredModelPort(
+	modelService *servingv1alpha1.ModelService,
+) int32 {
 	if modelService.Spec.Port == 0 {
 		return defaultModelPort
 	}
