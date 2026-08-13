@@ -22,9 +22,11 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	events "k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -36,7 +38,8 @@ import (
 // ModelServiceReconciler reconciles a ModelService object.
 type ModelServiceReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=serving.modelfleet.io,resources=modelservices,verbs=get;list;watch;create;update;patch;delete
@@ -44,6 +47,7 @@ type ModelServiceReconciler struct {
 // +kubebuilder:rbac:groups=serving.modelfleet.io,resources=modelservices/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile moves the actual Kubernetes state toward the desired ModelService state.
 func (r *ModelServiceReconciler) Reconcile(
@@ -82,11 +86,20 @@ func (r *ModelServiceReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
+	statusUpdated, err := r.reconcileStatus(
+		ctx,
+		modelService,
+	)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	logger.Info(
 		"Reconciled ModelService resources",
 		"modelService", req.NamespacedName,
 		"deploymentOperation", deploymentOperation,
 		"serviceOperation", serviceOperation,
+		"statusUpdated", statusUpdated,
 	)
 
 	return ctrl.Result{}, nil
@@ -190,6 +203,66 @@ func (r *ModelServiceReconciler) reconcileService(
 	return operation, nil
 }
 
+func (r *ModelServiceReconciler) reconcileStatus(
+	ctx context.Context,
+	modelService *servingv1alpha1.ModelService,
+) (bool, error) {
+	deployment := &appsv1.Deployment{}
+
+	deploymentKey := client.ObjectKey{
+		Name:      modelDeploymentName(modelService),
+		Namespace: modelService.Namespace,
+	}
+
+	if err := r.Get(
+		ctx,
+		deploymentKey,
+		deployment,
+	); err != nil {
+		return false, fmt.Errorf(
+			"get Deployment %s for ModelService status: %w",
+			deploymentKey,
+			err,
+		)
+	}
+
+	previousPhase := modelService.Status.Phase
+
+	desiredStatus := buildModelServiceStatus(
+		modelService,
+		deployment,
+	)
+
+	if apiequality.Semantic.DeepEqual(
+		modelService.Status,
+		desiredStatus,
+	) {
+		return false, nil
+	}
+
+	modelService.Status = desiredStatus
+
+	if err := r.Status().Update(
+		ctx,
+		modelService,
+	); err != nil {
+		return false, fmt.Errorf(
+			"update ModelService %s/%s status: %w",
+			modelService.Namespace,
+			modelService.Name,
+			err,
+		)
+	}
+
+	r.recordStatusTransitionEvent(
+		modelService,
+		previousPhase,
+		desiredStatus.Phase,
+	)
+
+	return true, nil
+}
+
 func applyDesiredDeployment(
 	modelService *servingv1alpha1.ModelService,
 	desired *appsv1.Deployment,
@@ -235,14 +308,17 @@ func applyDesiredDeployment(
 
 	actualRuntime.Image = desiredRuntime.Image
 	actualRuntime.ImagePullPolicy = desiredRuntime.ImagePullPolicy
+
 	actualRuntime.Args = append(
 		[]string(nil),
 		desiredRuntime.Args...,
 	)
+
 	actualRuntime.Ports = append(
 		[]corev1.ContainerPort(nil),
 		desiredRuntime.Ports...,
 	)
+
 	actualRuntime.Resources =
 		*desiredRuntime.Resources.DeepCopy()
 
@@ -300,7 +376,9 @@ func findRuntimeContainer(
 	return nil
 }
 
-func copyProbe(source *corev1.Probe) *corev1.Probe {
+func copyProbe(
+	source *corev1.Probe,
+) *corev1.Probe {
 	if source == nil {
 		return nil
 	}
@@ -308,7 +386,9 @@ func copyProbe(source *corev1.Probe) *corev1.Probe {
 	return source.DeepCopy()
 }
 
-func copyStringMap(source map[string]string) map[string]string {
+func copyStringMap(
+	source map[string]string,
+) map[string]string {
 	if source == nil {
 		return nil
 	}
@@ -329,10 +409,14 @@ func copyServicePorts(
 		return nil
 	}
 
-	result := make([]corev1.ServicePort, len(source))
+	result := make(
+		[]corev1.ServicePort,
+		len(source),
+	)
 
 	for index := range source {
-		result[index] = *source[index].DeepCopy()
+		result[index] =
+			*source[index].DeepCopy()
 	}
 
 	return result
@@ -342,6 +426,12 @@ func copyServicePorts(
 func (r *ModelServiceReconciler) SetupWithManager(
 	mgr ctrl.Manager,
 ) error {
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorder(
+			"modelservice-controller",
+		)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&servingv1alpha1.ModelService{}).
 		Owns(&appsv1.Deployment{}).
