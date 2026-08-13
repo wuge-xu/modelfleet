@@ -43,6 +43,7 @@ type ModelServiceReconciler struct {
 // +kubebuilder:rbac:groups=serving.modelfleet.io,resources=modelservices/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=serving.modelfleet.io,resources=modelservices/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile moves the actual Kubernetes state toward the desired ModelService state.
 func (r *ModelServiceReconciler) Reconcile(
@@ -65,14 +66,45 @@ func (r *ModelServiceReconciler) Reconcile(
 		)
 	}
 
+	deploymentOperation, err := r.reconcileDeployment(
+		ctx,
+		modelService,
+	)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	serviceOperation, err := r.reconcileService(
+		ctx,
+		modelService,
+	)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	logger.Info(
+		"Reconciled ModelService resources",
+		"modelService", req.NamespacedName,
+		"deploymentOperation", deploymentOperation,
+		"serviceOperation", serviceOperation,
+	)
+
+	return ctrl.Result{}, nil
+}
+
+func (r *ModelServiceReconciler) reconcileDeployment(
+	ctx context.Context,
+	modelService *servingv1alpha1.ModelService,
+) (controllerutil.OperationResult, error) {
 	desiredDeployment, err := buildModelDeployment(
 		modelService,
 		r.Scheme,
 	)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf(
-			"build Deployment for ModelService %s: %w",
-			req.NamespacedName,
+		return controllerutil.OperationResultNone, fmt.Errorf(
+			"build Deployment for ModelService %s/%s: %w",
+			modelService.Namespace,
+			modelService.Name,
 			err,
 		)
 	}
@@ -98,7 +130,7 @@ func (r *ModelServiceReconciler) Reconcile(
 		},
 	)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf(
+		return controllerutil.OperationResultNone, fmt.Errorf(
 			"reconcile Deployment %s/%s: %w",
 			deployment.Namespace,
 			deployment.Name,
@@ -106,14 +138,56 @@ func (r *ModelServiceReconciler) Reconcile(
 		)
 	}
 
-	logger.Info(
-		"Reconciled model Deployment",
-		"modelService", req.NamespacedName,
-		"deployment", client.ObjectKeyFromObject(deployment),
-		"operation", operation,
-	)
+	return operation, nil
+}
 
-	return ctrl.Result{}, nil
+func (r *ModelServiceReconciler) reconcileService(
+	ctx context.Context,
+	modelService *servingv1alpha1.ModelService,
+) (controllerutil.OperationResult, error) {
+	desiredService, err := buildModelService(
+		modelService,
+		r.Scheme,
+	)
+	if err != nil {
+		return controllerutil.OperationResultNone, fmt.Errorf(
+			"build Service for ModelService %s/%s: %w",
+			modelService.Namespace,
+			modelService.Name,
+			err,
+		)
+	}
+
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      desiredService.Name,
+			Namespace: desiredService.Namespace,
+		},
+	}
+
+	operation, err := controllerutil.CreateOrUpdate(
+		ctx,
+		r.Client,
+		service,
+		func() error {
+			return applyDesiredService(
+				modelService,
+				desiredService,
+				service,
+				r.Scheme,
+			)
+		},
+	)
+	if err != nil {
+		return controllerutil.OperationResultNone, fmt.Errorf(
+			"reconcile Service %s/%s: %w",
+			service.Namespace,
+			service.Name,
+			err,
+		)
+	}
+
+	return operation, nil
 }
 
 func applyDesiredDeployment(
@@ -176,6 +250,36 @@ func applyDesiredDeployment(
 	return nil
 }
 
+func applyDesiredService(
+	modelService *servingv1alpha1.ModelService,
+	desired *corev1.Service,
+	actual *corev1.Service,
+	scheme *runtime.Scheme,
+) error {
+	if err := controllerutil.SetControllerReference(
+		modelService,
+		actual,
+		scheme,
+	); err != nil {
+		return fmt.Errorf(
+			"set ModelService controller reference on Service: %w",
+			err,
+		)
+	}
+
+	actual.Labels = copyStringMap(desired.Labels)
+	actual.Annotations = copyStringMap(desired.Annotations)
+
+	actual.Spec.Type = desired.Spec.Type
+	actual.Spec.Selector = copyStringMap(desired.Spec.Selector)
+	actual.Spec.Ports = copyServicePorts(desired.Spec.Ports)
+
+	// ClusterIP, ClusterIPs, IPFamilies and similar fields are assigned
+	// or defaulted by Kubernetes and must not be overwritten here.
+
+	return nil
+}
+
 func findRuntimeContainer(
 	deployment *appsv1.Deployment,
 ) *corev1.Container {
@@ -205,6 +309,22 @@ func copyStringMap(source map[string]string) map[string]string {
 	return result
 }
 
+func copyServicePorts(
+	source []corev1.ServicePort,
+) []corev1.ServicePort {
+	if source == nil {
+		return nil
+	}
+
+	result := make([]corev1.ServicePort, len(source))
+
+	for index := range source {
+		result[index] = *source[index].DeepCopy()
+	}
+
+	return result
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *ModelServiceReconciler) SetupWithManager(
 	mgr ctrl.Manager,
@@ -212,6 +332,7 @@ func (r *ModelServiceReconciler) SetupWithManager(
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&servingv1alpha1.ModelService{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
 		Named("modelservice").
 		Complete(r)
 }
