@@ -115,7 +115,7 @@ var _ = Describe("ModelService probe reconciliation", func() {
 		}
 	})
 
-	It("creates and self-heals runtime probes", func() {
+	It("creates and self-heals runtime-specific probes", func() {
 		controllerReconciler := &ModelServiceReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
@@ -125,9 +125,16 @@ var _ = Describe("ModelService probe reconciliation", func() {
 			NamespacedName: modelServiceKey,
 		}
 
-		By("creating the Deployment with all probes")
+		adapter, err := resolveRuntimeAdapter(
+			servingv1alpha1.RuntimeTypeVLLM,
+		)
+		Expect(err).NotTo(HaveOccurred())
 
-		_, err := controllerReconciler.Reconcile(
+		expectedPaths := adapter.ProbePaths()
+
+		By("creating the Deployment with vLLM probes")
+
+		_, err = controllerReconciler.Reconcile(
 			ctx,
 			request,
 		)
@@ -146,7 +153,10 @@ var _ = Describe("ModelService probe reconciliation", func() {
 		runtimeContainer :=
 			&deployment.Spec.Template.Spec.Containers[0]
 
-		expectRuntimeProbes(runtimeContainer)
+		expectRuntimeProbes(
+			runtimeContainer,
+			expectedPaths,
+		)
 
 		By("manually removing and corrupting probe configuration")
 
@@ -204,12 +214,16 @@ var _ = Describe("ModelService probe reconciliation", func() {
 		healedRuntime :=
 			&healedDeployment.Spec.Template.Spec.Containers[0]
 
-		expectRuntimeProbes(healedRuntime)
+		expectRuntimeProbes(
+			healedRuntime,
+			expectedPaths,
+		)
 	})
 })
 
 func expectRuntimeProbes(
 	runtimeContainer *corev1.Container,
+	expectedPaths runtimeProbePaths,
 ) {
 	Expect(runtimeContainer.StartupProbe).
 		NotTo(BeNil())
@@ -218,7 +232,7 @@ func expectRuntimeProbes(
 		NotTo(BeNil())
 
 	Expect(runtimeContainer.StartupProbe.HTTPGet.Path).
-		To(Equal(startupProbePath))
+		To(Equal(expectedPaths.Startup))
 
 	Expect(runtimeContainer.StartupProbe.HTTPGet.Port).
 		To(Equal(intstr.FromString(runtimeHTTPPortName)))
@@ -239,7 +253,7 @@ func expectRuntimeProbes(
 		NotTo(BeNil())
 
 	Expect(runtimeContainer.ReadinessProbe.HTTPGet.Path).
-		To(Equal(readinessProbePath))
+		To(Equal(expectedPaths.Readiness))
 
 	Expect(runtimeContainer.ReadinessProbe.HTTPGet.Port).
 		To(Equal(intstr.FromString(runtimeHTTPPortName)))
@@ -260,7 +274,7 @@ func expectRuntimeProbes(
 		NotTo(BeNil())
 
 	Expect(runtimeContainer.LivenessProbe.HTTPGet.Path).
-		To(Equal(livenessProbePath))
+		To(Equal(expectedPaths.Liveness))
 
 	Expect(runtimeContainer.LivenessProbe.HTTPGet.Port).
 		To(Equal(intstr.FromString(runtimeHTTPPortName)))

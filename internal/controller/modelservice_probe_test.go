@@ -32,6 +32,9 @@ func TestBuildModelDeploymentProbes(t *testing.T) {
 			Runtime: servingv1alpha1.RuntimeSpec{
 				Type:  servingv1alpha1.RuntimeTypeVLLM,
 				Image: "example.invalid/runtime:v1",
+				Args: []string{
+					"--tensor-parallel-size=1",
+				},
 			},
 			Port: 9000,
 		},
@@ -77,11 +80,26 @@ func TestBuildModelDeploymentProbes(t *testing.T) {
 		)
 	}
 
+	if len(runtimeContainer.Args) != 1 {
+		t.Fatalf(
+			"expected one runtime argument, got %d",
+			len(runtimeContainer.Args),
+		)
+	}
+
+	if runtimeContainer.Args[0] !=
+		"--tensor-parallel-size=1" {
+		t.Fatalf(
+			"unexpected runtime argument %q",
+			runtimeContainer.Args[0],
+		)
+	}
+
 	assertHTTPProbe(
 		t,
 		"startup",
 		runtimeContainer.StartupProbe,
-		startupProbePath,
+		"/health",
 		5,
 		2,
 		60,
@@ -91,7 +109,7 @@ func TestBuildModelDeploymentProbes(t *testing.T) {
 		t,
 		"readiness",
 		runtimeContainer.ReadinessProbe,
-		readinessProbePath,
+		"/health",
 		5,
 		2,
 		3,
@@ -101,7 +119,7 @@ func TestBuildModelDeploymentProbes(t *testing.T) {
 		t,
 		"liveness",
 		runtimeContainer.LivenessProbe,
-		livenessProbePath,
+		"/health",
 		10,
 		2,
 		3,

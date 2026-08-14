@@ -35,16 +35,24 @@ const (
 
 	runtimeContainerName = "runtime"
 	runtimeHTTPPortName  = "http"
-
-	startupProbePath   = "/health"
-	readinessProbePath = "/ready"
-	livenessProbePath  = "/health"
 )
 
 func buildModelDeployment(
 	modelService *servingv1alpha1.ModelService,
 	scheme *runtime.Scheme,
 ) (*appsv1.Deployment, error) {
+	adapter, err := resolveRuntimeAdapter(
+		modelService.Spec.Runtime.Type,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"resolve runtime adapter: %w",
+			err,
+		)
+	}
+
+	probePaths := adapter.ProbePaths()
+
 	labels := modelDeploymentLabels(modelService)
 	selectorLabels := modelSelectorLabels(modelService)
 
@@ -76,10 +84,7 @@ func buildModelDeployment(
 							Name:            runtimeContainerName,
 							Image:           modelService.Spec.Runtime.Image,
 							ImagePullPolicy: corev1.PullIfNotPresent,
-							Args: append(
-								[]string(nil),
-								modelService.Spec.Runtime.Args...,
-							),
+							Args:            adapter.BuildArgs(modelService),
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          runtimeHTTPPortName,
@@ -90,21 +95,21 @@ func buildModelDeployment(
 							Resources: *modelService.Spec.Resources.DeepCopy(),
 
 							StartupProbe: buildHTTPProbe(
-								startupProbePath,
+								probePaths.Startup,
 								5,
 								2,
 								60,
 							),
 
 							ReadinessProbe: buildHTTPProbe(
-								readinessProbePath,
+								probePaths.Readiness,
 								5,
 								2,
 								3,
 							),
 
 							LivenessProbe: buildHTTPProbe(
-								livenessProbePath,
+								probePaths.Liveness,
 								10,
 								2,
 								3,
