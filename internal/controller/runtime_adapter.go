@@ -22,61 +22,84 @@ type runtimeAdapter interface {
 	) []string
 }
 
-type fixedRuntimeAdapter struct {
-	runtimeType servingv1alpha1.RuntimeType
-	probePaths  runtimeProbePaths
+type transformersRuntimeAdapter struct{}
+
+type kvCacheServeRuntimeAdapter struct{}
+
+type vLLMRuntimeAdapter struct{}
+
+var _ runtimeAdapter = transformersRuntimeAdapter{}
+var _ runtimeAdapter = kvCacheServeRuntimeAdapter{}
+var _ runtimeAdapter = vLLMRuntimeAdapter{}
+
+func (transformersRuntimeAdapter) RuntimeType() servingv1alpha1.RuntimeType {
+	return servingv1alpha1.RuntimeTypeTransformers
 }
 
-func (a fixedRuntimeAdapter) RuntimeType() servingv1alpha1.RuntimeType {
-	return a.runtimeType
+func (transformersRuntimeAdapter) ProbePaths() runtimeProbePaths {
+	return runtimeProbePaths{
+		Startup:   "/health",
+		Readiness: "/ready",
+		Liveness:  "/health",
+	}
 }
 
-func (a fixedRuntimeAdapter) ProbePaths() runtimeProbePaths {
-	return a.probePaths
-}
-
-func (a fixedRuntimeAdapter) BuildArgs(
+func (transformersRuntimeAdapter) BuildArgs(
 	modelService *servingv1alpha1.ModelService,
 ) []string {
-	return append(
-		[]string(nil),
-		modelService.Spec.Runtime.Args...,
+	return copyRuntimeArgs(modelService)
+}
+
+func (kvCacheServeRuntimeAdapter) RuntimeType() servingv1alpha1.RuntimeType {
+	return servingv1alpha1.RuntimeType(
+		"kvcache-serve",
 	)
+}
+
+func (kvCacheServeRuntimeAdapter) ProbePaths() runtimeProbePaths {
+	return runtimeProbePaths{
+		Startup:   "/health",
+		Readiness: "/ready",
+		Liveness:  "/health",
+	}
+}
+
+func (kvCacheServeRuntimeAdapter) BuildArgs(
+	modelService *servingv1alpha1.ModelService,
+) []string {
+	return copyRuntimeArgs(modelService)
+}
+
+func (vLLMRuntimeAdapter) RuntimeType() servingv1alpha1.RuntimeType {
+	return servingv1alpha1.RuntimeTypeVLLM
+}
+
+func (vLLMRuntimeAdapter) ProbePaths() runtimeProbePaths {
+	return runtimeProbePaths{
+		Startup:   "/health",
+		Readiness: "/health",
+		Liveness:  "/health",
+	}
+}
+
+func (vLLMRuntimeAdapter) BuildArgs(
+	modelService *servingv1alpha1.ModelService,
+) []string {
+	return copyRuntimeArgs(modelService)
 }
 
 func resolveRuntimeAdapter(
 	runtimeType servingv1alpha1.RuntimeType,
 ) (runtimeAdapter, error) {
-	switch string(runtimeType) {
-	case "transformers":
-		return fixedRuntimeAdapter{
-			runtimeType: runtimeType,
-			probePaths: runtimeProbePaths{
-				Startup:   "/health",
-				Readiness: "/ready",
-				Liveness:  "/health",
-			},
-		}, nil
+	switch runtimeType {
+	case servingv1alpha1.RuntimeTypeTransformers:
+		return transformersRuntimeAdapter{}, nil
 
-	case "kvcache-serve":
-		return fixedRuntimeAdapter{
-			runtimeType: runtimeType,
-			probePaths: runtimeProbePaths{
-				Startup:   "/health",
-				Readiness: "/ready",
-				Liveness:  "/health",
-			},
-		}, nil
+	case servingv1alpha1.RuntimeType("kvcache-serve"):
+		return kvCacheServeRuntimeAdapter{}, nil
 
-	case "vllm":
-		return fixedRuntimeAdapter{
-			runtimeType: runtimeType,
-			probePaths: runtimeProbePaths{
-				Startup:   "/health",
-				Readiness: "/health",
-				Liveness:  "/health",
-			},
-		}, nil
+	case servingv1alpha1.RuntimeTypeVLLM:
+		return vLLMRuntimeAdapter{}, nil
 
 	default:
 		return nil, fmt.Errorf(
@@ -84,4 +107,13 @@ func resolveRuntimeAdapter(
 			runtimeType,
 		)
 	}
+}
+
+func copyRuntimeArgs(
+	modelService *servingv1alpha1.ModelService,
+) []string {
+	return append(
+		[]string(nil),
+		modelService.Spec.Runtime.Args...,
+	)
 }

@@ -15,6 +15,7 @@ func TestResolveRuntimeAdapter(t *testing.T) {
 		expectedStartup   string
 		expectedReadiness string
 		expectedLiveness  string
+		assertType        func(t *testing.T, adapter runtimeAdapter)
 	}{
 		{
 			name:              "transformers",
@@ -22,6 +23,19 @@ func TestResolveRuntimeAdapter(t *testing.T) {
 			expectedStartup:   "/health",
 			expectedReadiness: "/ready",
 			expectedLiveness:  "/health",
+			assertType: func(
+				t *testing.T,
+				adapter runtimeAdapter,
+			) {
+				t.Helper()
+
+				if _, ok := adapter.(transformersRuntimeAdapter); !ok {
+					t.Fatalf(
+						"expected transformersRuntimeAdapter, got %T",
+						adapter,
+					)
+				}
+			},
 		},
 		{
 			name: "kvcache serve",
@@ -31,6 +45,19 @@ func TestResolveRuntimeAdapter(t *testing.T) {
 			expectedStartup:   "/health",
 			expectedReadiness: "/ready",
 			expectedLiveness:  "/health",
+			assertType: func(
+				t *testing.T,
+				adapter runtimeAdapter,
+			) {
+				t.Helper()
+
+				if _, ok := adapter.(kvCacheServeRuntimeAdapter); !ok {
+					t.Fatalf(
+						"expected kvCacheServeRuntimeAdapter, got %T",
+						adapter,
+					)
+				}
+			},
 		},
 		{
 			name:              "vllm",
@@ -38,6 +65,19 @@ func TestResolveRuntimeAdapter(t *testing.T) {
 			expectedStartup:   "/health",
 			expectedReadiness: "/health",
 			expectedLiveness:  "/health",
+			assertType: func(
+				t *testing.T,
+				adapter runtimeAdapter,
+			) {
+				t.Helper()
+
+				if _, ok := adapter.(vLLMRuntimeAdapter); !ok {
+					t.Fatalf(
+						"expected vLLMRuntimeAdapter, got %T",
+						adapter,
+					)
+				}
+			},
 		},
 	}
 
@@ -52,6 +92,8 @@ func TestResolveRuntimeAdapter(t *testing.T) {
 					err,
 				)
 			}
+
+			test.assertType(t, adapter)
 
 			if adapter.RuntimeType() != test.runtimeType {
 				t.Fatalf(
@@ -90,55 +132,65 @@ func TestResolveRuntimeAdapter(t *testing.T) {
 	}
 }
 
-func TestRuntimeAdapterBuildArgsReturnsCopy(t *testing.T) {
-	runtimeType := servingv1alpha1.RuntimeTypeVLLM
-
-	adapter, err := resolveRuntimeAdapter(runtimeType)
-	if err != nil {
-		t.Fatalf(
-			"resolve runtime adapter: %v",
-			err,
-		)
+func TestRuntimeAdaptersBuildArgsReturnCopy(t *testing.T) {
+	runtimeTypes := []servingv1alpha1.RuntimeType{
+		servingv1alpha1.RuntimeTypeTransformers,
+		servingv1alpha1.RuntimeType("kvcache-serve"),
+		servingv1alpha1.RuntimeTypeVLLM,
 	}
 
-	modelService := &servingv1alpha1.ModelService{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "adapter-model",
-			Namespace: "default",
-		},
-		Spec: servingv1alpha1.ModelServiceSpec{
-			Runtime: servingv1alpha1.RuntimeSpec{
-				Type: runtimeType,
-				Args: []string{
-					"--tensor-parallel-size=1",
+	for _, runtimeType := range runtimeTypes {
+		t.Run(string(runtimeType), func(t *testing.T) {
+			adapter, err := resolveRuntimeAdapter(
+				runtimeType,
+			)
+			if err != nil {
+				t.Fatalf(
+					"resolve runtime adapter: %v",
+					err,
+				)
+			}
+
+			modelService := &servingv1alpha1.ModelService{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "adapter-model",
+					Namespace: "default",
 				},
-			},
-		},
-	}
+				Spec: servingv1alpha1.ModelServiceSpec{
+					Runtime: servingv1alpha1.RuntimeSpec{
+						Type: runtimeType,
+						Args: []string{
+							"--example=value",
+						},
+					},
+				},
+			}
 
-	args := adapter.BuildArgs(modelService)
+			args := adapter.BuildArgs(modelService)
 
-	if len(args) != 1 {
-		t.Fatalf(
-			"expected one argument, got %d",
-			len(args),
-		)
-	}
+			if len(args) != 1 {
+				t.Fatalf(
+					"expected one argument, got %d",
+					len(args),
+				)
+			}
 
-	if args[0] != "--tensor-parallel-size=1" {
-		t.Fatalf(
-			"unexpected argument %q",
-			args[0],
-		)
-	}
+			if args[0] != "--example=value" {
+				t.Fatalf(
+					"unexpected argument %q",
+					args[0],
+				)
+			}
 
-	args[0] = "--changed"
+			args[0] = "--changed"
 
-	if modelService.Spec.Runtime.Args[0] !=
-		"--tensor-parallel-size=1" {
-		t.Fatal(
-			"adapter must return a copy of runtime arguments",
-		)
+			if modelService.Spec.Runtime.Args[0] !=
+				"--example=value" {
+				t.Fatal(
+					"adapter must return a copy of runtime arguments",
+				)
+			}
+		})
 	}
 }
 
