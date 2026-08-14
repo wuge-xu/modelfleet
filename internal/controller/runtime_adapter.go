@@ -2,6 +2,8 @@ package controller
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	servingv1alpha1 "github.com/wuge-xu/modelfleet/api/v1alpha1"
 )
@@ -85,7 +87,20 @@ func (vLLMRuntimeAdapter) ProbePaths() runtimeProbePaths {
 func (vLLMRuntimeAdapter) BuildArgs(
 	modelService *servingv1alpha1.ModelService,
 ) []string {
-	return copyRuntimeArgs(modelService)
+	args := []string{
+		"--model",
+		vLLMModelReference(modelService),
+		"--port",
+		strconv.FormatInt(
+			int64(desiredModelPort(modelService)),
+			10,
+		),
+	}
+
+	return append(
+		args,
+		copyRuntimeArgs(modelService)...,
+	)
 }
 
 func resolveRuntimeAdapter(
@@ -107,6 +122,27 @@ func resolveRuntimeAdapter(
 			runtimeType,
 		)
 	}
+}
+
+func vLLMModelReference(
+	modelService *servingv1alpha1.ModelService,
+) string {
+	modelURI := strings.TrimSpace(
+		modelService.Spec.Model.URI,
+	)
+
+	if strings.HasPrefix(modelURI, "hf://") {
+		return strings.TrimPrefix(
+			modelURI,
+			"hf://",
+		)
+	}
+
+	if modelURI != "" {
+		return modelURI
+	}
+
+	return modelService.Spec.Model.Name
 }
 
 func copyRuntimeArgs(

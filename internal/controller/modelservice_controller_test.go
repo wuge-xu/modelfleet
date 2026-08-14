@@ -1,19 +1,3 @@
-/*
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
@@ -23,6 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -53,24 +38,9 @@ var _ = Describe("ModelService Controller", func() {
 			Namespace: resourceNamespace,
 		}
 
-		reconciler := func() *ModelServiceReconciler {
-			return &ModelServiceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-		}
-
-		reconcileModelService := func(
-			controllerReconciler *ModelServiceReconciler,
-		) {
-			_, err := controllerReconciler.Reconcile(
-				ctx,
-				reconcile.Request{
-					NamespacedName: modelServiceKey,
-				},
-			)
-
-			Expect(err).NotTo(HaveOccurred())
+		serviceKey := types.NamespacedName{
+			Name:      resourceName + "-service",
+			Namespace: resourceNamespace,
 		}
 
 		BeforeEach(func() {
@@ -92,13 +62,31 @@ var _ = Describe("ModelService Controller", func() {
 				},
 			}
 
-			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			Expect(
+				k8sClient.Create(ctx, resource),
+			).To(Succeed())
 		})
 
 		AfterEach(func() {
-			deployment := &appsv1.Deployment{}
+			service := &corev1.Service{}
 
 			err := k8sClient.Get(
+				ctx,
+				serviceKey,
+				service,
+			)
+
+			if err == nil {
+				Expect(
+					k8sClient.Delete(ctx, service),
+				).To(Succeed())
+			} else {
+				Expect(errors.IsNotFound(err)).To(BeTrue())
+			}
+
+			deployment := &appsv1.Deployment{}
+
+			err = k8sClient.Get(
 				ctx,
 				deploymentKey,
 				deployment,
@@ -112,7 +100,8 @@ var _ = Describe("ModelService Controller", func() {
 				Expect(errors.IsNotFound(err)).To(BeTrue())
 			}
 
-			modelService := &servingv1alpha1.ModelService{}
+			modelService :=
+				&servingv1alpha1.ModelService{}
 
 			err = k8sClient.Get(
 				ctx,
@@ -130,11 +119,22 @@ var _ = Describe("ModelService Controller", func() {
 		})
 
 		It("creates, updates and self-heals the managed Deployment", func() {
-			controllerReconciler := reconciler()
+			controllerReconciler := &ModelServiceReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			request := reconcile.Request{
+				NamespacedName: modelServiceKey,
+			}
 
 			By("creating Deployment on first reconcile")
 
-			reconcileModelService(controllerReconciler)
+			_, err := controllerReconciler.Reconcile(
+				ctx,
+				request,
+			)
+			Expect(err).NotTo(HaveOccurred())
 
 			deployment := &appsv1.Deployment{}
 
@@ -146,22 +146,28 @@ var _ = Describe("ModelService Controller", func() {
 				)
 			}, "5s", "200ms").Should(Succeed())
 
-			Expect(deployment.Spec.Replicas).NotTo(BeNil())
-			Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
+			Expect(deployment.Spec.Replicas).
+				NotTo(BeNil())
 
-			Expect(
-				deployment.Spec.Template.Spec.Containers,
-			).To(HaveLen(1))
+			Expect(*deployment.Spec.Replicas).
+				To(Equal(int32(1)))
 
-			Expect(
-				deployment.Spec.Template.Spec.Containers[0].Image,
-			).To(Equal(initialImage))
+			runtimeContainer :=
+				deployment.Spec.Template.Spec.Containers[0]
 
-			firstResourceVersion := deployment.ResourceVersion
+			Expect(runtimeContainer.Image).
+				To(Equal(initialImage))
+
+			firstResourceVersion :=
+				deployment.ResourceVersion
 
 			By("remaining idempotent on repeated reconcile")
 
-			reconcileModelService(controllerReconciler)
+			_, err = controllerReconciler.Reconcile(
+				ctx,
+				request,
+			)
+			Expect(err).NotTo(HaveOccurred())
 
 			secondDeployment := &appsv1.Deployment{}
 
@@ -179,7 +185,8 @@ var _ = Describe("ModelService Controller", func() {
 
 			By("updating Deployment after ModelService spec changes")
 
-			modelService := &servingv1alpha1.ModelService{}
+			modelService :=
+				&servingv1alpha1.ModelService{}
 
 			Expect(
 				k8sClient.Get(
@@ -194,18 +201,31 @@ var _ = Describe("ModelService Controller", func() {
 			modelService.Spec.Replicas = &replicas
 			modelService.Spec.Port = 9000
 			modelService.Spec.Model.Version = "v2"
-			modelService.Spec.Model.URI = "hf://example/test-model-v2"
-			modelService.Spec.Runtime.Type = servingv1alpha1.RuntimeTypeVLLM
-			modelService.Spec.Runtime.Image = updatedImage
+			modelService.Spec.Model.URI =
+				"hf://example/test-model-v2"
+
+			modelService.Spec.Runtime.Type =
+				servingv1alpha1.RuntimeTypeVLLM
+
+			modelService.Spec.Runtime.Image =
+				updatedImage
+
 			modelService.Spec.Runtime.Args = []string{
-				"--model=hf://example/test-model-v2",
+				"--tensor-parallel-size=1",
 			}
 
 			Expect(
-				k8sClient.Update(ctx, modelService),
+				k8sClient.Update(
+					ctx,
+					modelService,
+				),
 			).To(Succeed())
 
-			reconcileModelService(controllerReconciler)
+			_, err = controllerReconciler.Reconcile(
+				ctx,
+				request,
+			)
+			Expect(err).NotTo(HaveOccurred())
 
 			updatedDeployment := &appsv1.Deployment{}
 
@@ -217,39 +237,47 @@ var _ = Describe("ModelService Controller", func() {
 				),
 			).To(Succeed())
 
-			Expect(updatedDeployment.Spec.Replicas).NotTo(BeNil())
-			Expect(*updatedDeployment.Spec.Replicas).To(Equal(int32(3)))
+			Expect(updatedDeployment.Spec.Replicas).
+				NotTo(BeNil())
+
+			Expect(*updatedDeployment.Spec.Replicas).
+				To(Equal(int32(3)))
 
 			updatedRuntime :=
 				updatedDeployment.Spec.Template.Spec.Containers[0]
 
-			Expect(updatedRuntime.Image).To(Equal(updatedImage))
+			Expect(updatedRuntime.Image).
+				To(Equal(updatedImage))
 
 			Expect(updatedRuntime.Args).To(Equal(
 				[]string{
-					"--model=hf://example/test-model-v2",
+					"--model",
+					"example/test-model-v2",
+					"--port",
+					"9000",
+					"--tensor-parallel-size=1",
 				},
 			))
 
 			Expect(updatedRuntime.Ports).To(HaveLen(1))
+
 			Expect(
 				updatedRuntime.Ports[0].ContainerPort,
 			).To(Equal(int32(9000)))
 
-			runtimeLabel :=
-				updatedDeployment.Spec.Template.Labels["serving.modelfleet.io/runtime"]
+			Expect(
+				updatedDeployment.Spec.Template.Labels["serving.modelfleet.io/runtime"],
+			).To(Equal("vllm"))
 
-			Expect(runtimeLabel).To(Equal("vllm"))
-
-			modelVersion :=
-				updatedDeployment.Annotations["serving.modelfleet.io/model-version"]
-
-			Expect(modelVersion).To(Equal("v2"))
+			Expect(
+				updatedDeployment.Annotations["serving.modelfleet.io/model-version"],
+			).To(Equal("v2"))
 
 			_, selectorContainsRuntime :=
 				updatedDeployment.Spec.Selector.MatchLabels["serving.modelfleet.io/runtime"]
 
-			Expect(selectorContainsRuntime).To(BeFalse())
+			Expect(selectorContainsRuntime).
+				To(BeFalse())
 
 			By("restoring manually drifted Deployment fields")
 
@@ -293,7 +321,11 @@ var _ = Describe("ModelService Controller", func() {
 				),
 			).To(Succeed())
 
-			reconcileModelService(controllerReconciler)
+			_, err = controllerReconciler.Reconcile(
+				ctx,
+				request,
+			)
+			Expect(err).NotTo(HaveOccurred())
 
 			healedDeployment := &appsv1.Deployment{}
 
@@ -305,7 +337,9 @@ var _ = Describe("ModelService Controller", func() {
 				),
 			).To(Succeed())
 
-			Expect(healedDeployment.Spec.Replicas).NotTo(BeNil())
+			Expect(healedDeployment.Spec.Replicas).
+				NotTo(BeNil())
+
 			Expect(*healedDeployment.Spec.Replicas).
 				To(Equal(int32(3)))
 
@@ -315,22 +349,23 @@ var _ = Describe("ModelService Controller", func() {
 			Expect(healedRuntime.Image).
 				To(Equal(updatedImage))
 
-			Expect(healedRuntime.Args).
-				To(Equal(
-					[]string{
-						"--model=hf://example/test-model-v2",
-					},
-				))
+			Expect(healedRuntime.Args).To(Equal(
+				[]string{
+					"--model",
+					"example/test-model-v2",
+					"--port",
+					"9000",
+					"--tensor-parallel-size=1",
+				},
+			))
 
-			healedRuntimeLabel :=
-				healedDeployment.Spec.Template.Labels["serving.modelfleet.io/runtime"]
+			Expect(
+				healedDeployment.Spec.Template.Labels["serving.modelfleet.io/runtime"],
+			).To(Equal("vllm"))
 
-			Expect(healedRuntimeLabel).To(Equal("vllm"))
-
-			healedVersion :=
-				healedDeployment.Annotations["serving.modelfleet.io/model-version"]
-
-			Expect(healedVersion).To(Equal("v2"))
+			Expect(
+				healedDeployment.Annotations["serving.modelfleet.io/model-version"],
+			).To(Equal("v2"))
 		})
 	})
 })

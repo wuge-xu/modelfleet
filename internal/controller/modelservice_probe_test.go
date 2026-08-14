@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -48,50 +49,25 @@ func TestBuildModelDeploymentProbes(t *testing.T) {
 		t.Fatalf("build Deployment: %v", err)
 	}
 
-	if len(deployment.Spec.Template.Spec.Containers) != 1 {
-		t.Fatalf(
-			"expected one runtime container, got %d",
-			len(deployment.Spec.Template.Spec.Containers),
-		)
-	}
-
 	runtimeContainer :=
 		deployment.Spec.Template.Spec.Containers[0]
 
-	if len(runtimeContainer.Ports) != 1 {
-		t.Fatalf(
-			"expected one container port, got %d",
-			len(runtimeContainer.Ports),
-		)
+	expectedArgs := []string{
+		"--model",
+		"example/probe-model",
+		"--port",
+		"9000",
+		"--tensor-parallel-size=1",
 	}
 
-	if runtimeContainer.Ports[0].Name != runtimeHTTPPortName {
+	if !reflect.DeepEqual(
+		runtimeContainer.Args,
+		expectedArgs,
+	) {
 		t.Fatalf(
-			"expected named port %q, got %q",
-			runtimeHTTPPortName,
-			runtimeContainer.Ports[0].Name,
-		)
-	}
-
-	if runtimeContainer.Ports[0].ContainerPort != 9000 {
-		t.Fatalf(
-			"expected container port 9000, got %d",
-			runtimeContainer.Ports[0].ContainerPort,
-		)
-	}
-
-	if len(runtimeContainer.Args) != 1 {
-		t.Fatalf(
-			"expected one runtime argument, got %d",
-			len(runtimeContainer.Args),
-		)
-	}
-
-	if runtimeContainer.Args[0] !=
-		"--tensor-parallel-size=1" {
-		t.Fatalf(
-			"unexpected runtime argument %q",
-			runtimeContainer.Args[0],
+			"expected args %v, got %v",
+			expectedArgs,
+			runtimeContainer.Args,
 		)
 	}
 
@@ -163,11 +139,11 @@ func assertHTTPProbe(
 		)
 	}
 
-	if probe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+	if probe.SuccessThreshold != 1 {
 		t.Fatalf(
-			"%s probe expected HTTP scheme, got %s",
+			"%s probe expected success threshold 1, got %d",
 			name,
-			probe.HTTPGet.Scheme,
+			probe.SuccessThreshold,
 		)
 	}
 

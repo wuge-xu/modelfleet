@@ -151,6 +151,7 @@ func buildHTTPProbe(
 		},
 		PeriodSeconds:    periodSeconds,
 		TimeoutSeconds:   timeoutSeconds,
+		SuccessThreshold: 1,
 		FailureThreshold: failureThreshold,
 	}
 }

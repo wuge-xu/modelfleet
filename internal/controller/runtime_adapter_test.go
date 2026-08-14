@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"reflect"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -132,11 +133,12 @@ func TestResolveRuntimeAdapter(t *testing.T) {
 	}
 }
 
-func TestRuntimeAdaptersBuildArgsReturnCopy(t *testing.T) {
+func TestSimpleRuntimeAdaptersBuildArgsReturnCopy(
+	t *testing.T,
+) {
 	runtimeTypes := []servingv1alpha1.RuntimeType{
 		servingv1alpha1.RuntimeTypeTransformers,
 		servingv1alpha1.RuntimeType("kvcache-serve"),
-		servingv1alpha1.RuntimeTypeVLLM,
 	}
 
 	for _, runtimeType := range runtimeTypes {
@@ -191,6 +193,124 @@ func TestRuntimeAdaptersBuildArgsReturnCopy(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestVLLMRuntimeAdapterBuildArgsFromHFURI(
+	t *testing.T,
+) {
+	adapter := vLLMRuntimeAdapter{}
+
+	modelService := &servingv1alpha1.ModelService{
+		Spec: servingv1alpha1.ModelServiceSpec{
+			Model: servingv1alpha1.ModelSpec{
+				Name: "qwen",
+				URI:  "hf://Qwen/Qwen3-0.6B",
+			},
+			Runtime: servingv1alpha1.RuntimeSpec{
+				Type: servingv1alpha1.RuntimeTypeVLLM,
+				Args: []string{
+					"--tensor-parallel-size=1",
+				},
+			},
+			Port: 9000,
+		},
+	}
+
+	args := adapter.BuildArgs(modelService)
+
+	expected := []string{
+		"--model",
+		"Qwen/Qwen3-0.6B",
+		"--port",
+		"9000",
+		"--tensor-parallel-size=1",
+	}
+
+	if !reflect.DeepEqual(args, expected) {
+		t.Fatalf(
+			"expected args %v, got %v",
+			expected,
+			args,
+		)
+	}
+}
+
+func TestVLLMModelReferencePreservesLocalPath(
+	t *testing.T,
+) {
+	modelService := &servingv1alpha1.ModelService{
+		Spec: servingv1alpha1.ModelServiceSpec{
+			Model: servingv1alpha1.ModelSpec{
+				Name: "local-model",
+				URI:  "/models/qwen",
+			},
+		},
+	}
+
+	modelReference := vLLMModelReference(
+		modelService,
+	)
+
+	if modelReference != "/models/qwen" {
+		t.Fatalf(
+			"expected local model path, got %q",
+			modelReference,
+		)
+	}
+}
+
+func TestVLLMModelReferenceFallsBackToModelName(
+	t *testing.T,
+) {
+	modelService := &servingv1alpha1.ModelService{
+		Spec: servingv1alpha1.ModelServiceSpec{
+			Model: servingv1alpha1.ModelSpec{
+				Name: "Qwen/Qwen3-0.6B",
+			},
+		},
+	}
+
+	modelReference := vLLMModelReference(
+		modelService,
+	)
+
+	if modelReference != "Qwen/Qwen3-0.6B" {
+		t.Fatalf(
+			"expected model name fallback, got %q",
+			modelReference,
+		)
+	}
+}
+
+func TestVLLMRuntimeAdapterUsesDefaultPort(
+	t *testing.T,
+) {
+	adapter := vLLMRuntimeAdapter{}
+
+	modelService := &servingv1alpha1.ModelService{
+		Spec: servingv1alpha1.ModelServiceSpec{
+			Model: servingv1alpha1.ModelSpec{
+				URI: "hf://Qwen/Qwen3-0.6B",
+			},
+		},
+	}
+
+	args := adapter.BuildArgs(modelService)
+
+	expected := []string{
+		"--model",
+		"Qwen/Qwen3-0.6B",
+		"--port",
+		"8000",
+	}
+
+	if !reflect.DeepEqual(args, expected) {
+		t.Fatalf(
+			"expected args %v, got %v",
+			expected,
+			args,
+		)
 	}
 }
 
